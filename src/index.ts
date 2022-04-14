@@ -4,8 +4,6 @@ import * as Axios from 'axios';
 
 const axios = Axios.default;
 
-interface HeaderData {year: string, span: number};
-
 async function getDomOfUrl(url: string){
 
   try {
@@ -26,66 +24,67 @@ async function getDomOfUrl(url: string){
 const url = 'https://www.oit.va.gov/Services/TRM/ToolPage.aspx?tid=11601';
 
 getDomOfUrl(url)
-.then ( document => {
+    .then ( document => {
+        if (document) {
 
+            const removeJunk = (text: string) => text.replace(/(<([^>]+)>)/gi, "").trim();
 
-  const removeJunk = (text: string) => text.replace(/(<([^>]+)>)/gi, "").trim();
+            const forecastTable = Array.from(
+                document
+                // There are multiple tables of the Forecast class, but the one we want has exactly two header rows
+                .getElementsByClassName("Forecast"))
+                .filter((ele) => ele.querySelector("thead")?.children.length === 2)
+                .shift();   
 
+            /**  Parse header, has exactly two rows, first one is for the years, the second is for quarters.  Each year column spans the quarter columns for that year */
 
-  if (document) {
-    const forecastTable = Array.from(
-        document
-        // There are multiple tables of the Forecast class, but the one we want has exactly two header rows
-        .getElementsByClassName("Forecast"))
-        .filter((ele) => ele.querySelector("thead")?.children.length === 2)
-        .shift();   
+            const [yearRow, quarterRow] = forecastTable
+                .querySelector("thead")
+                ?.querySelectorAll(":scope > tr");
 
-    // Parse header, has exactly two rows, first one is for the years, the second is for quarters.  Each year column spans the quarter columns for that year
-    const [yearRow, quarterRow] = forecastTable
-        .querySelector("thead")
-        ?.querySelectorAll(":scope > tr");
-    const years = yearRow.querySelectorAll(":scope > th");
-    const quarters = Array.from(quarterRow.querySelectorAll(":scope > th"))
-    .slice(1)
-    .map( q => removeJunk(q.innerHTML));       
-    //
+            const yearSpanArr = Array.from(yearRow.querySelectorAll(":scope > th"))
+                ?.map((year) => {
+                    const rawSpan = year.getAttribute("colspan");
+                    const intSpan = rawSpan ? parseInt(rawSpan) : 1;
+                    return { year: year.textContent.trim(), span: intSpan };
+                })
+                .reduce<string[]>((prev, curr) => {
+                    return [...prev, ...Array(curr.span).fill(curr.year.slice(2))];
+                }, []);
+
+            const quarters = Array.from(quarterRow.querySelectorAll(":scope > th"))
+            // The first colum isn't a quarter, but a header for the release column, so remove
+            .slice(1)
+            .map( q => removeJunk(q.innerHTML));       
     
-    /** parse body */
-    const tableBody = forecastTable.querySelector("tbody");
-    const tableRows = Array.from(tableBody.querySelectorAll(":scope > tr")).filter ( row => row.children.length === quarters.length + 1);
+            //** Parse Body of table */
+            const releaseBody = forecastTable.querySelector("tbody");
+            /**
+             * The table constists of rows that represents two different things:
+             * 1. Quarerly decision data for a specific release (one column for each quarter)
+             * 2. Additional decisions constraint information ( columns have no relation to the quarter and span many columns)
+             * 
+             * We only care about the actual release data now, so we can check that the number of columns match the quarters to see if we should include it ( have to decrement by 1 to account for the column header)
+             */
+            const releaseRows = releaseBody  ? Array.from(releaseBody.querySelectorAll(":scope > tr")).filter ( row => row.children.length-1 === quarters.length) : [];
 
-    const yearObj: HeaderData[]  = Array.from(years)
-    .map((year) => {
-        const rawSpan = year.getAttribute("colspan");
-        const intSpan = rawSpan ? parseInt(rawSpan) : null;
-        return { year: year.textContent.trim(), span: intSpan };
-    });
-    
-    // Reduce 
-    const temp: HeaderData[] = [];
-    const dumbYears = yearObj.reduce((prev, curr) => {
-        return [...prev, ...Array(curr.span).fill(curr.year)];
-    }, temp);
-
-    tableRows.forEach( row => {
-        const cells = Array.from(row.querySelectorAll(":scope > td")) ?? [];
-        const version = cells?.shift().innerHTML;
-        const bigObj = cells.map((cell, cellIndex) => {
-          const year = dumbYears[cellIndex];
-          const currCell = {
-            year,
-            quarter: quarters[cellIndex],
-            value: cell.innerHTML.replace(/(<([^>]+)>)/gi, "").trim()
-          };
-          return currCell;
-        });
-        const biggerObj = { version, quarters: bigObj };
-        console.log(biggerObj);
-      });
+            // Iterate through each release row, 
+            const myObj = releaseRows.map( row => {
+                const cells = Array.from(row.querySelectorAll(":scope > td"));
+                const version = cells?.shift().innerHTML;
+                const qDecisions = cells?.map((cell, cellIndex) => {
+                    return {
+                        year: yearSpanArr[cellIndex],
+                        quarter: quarters[cellIndex].slice(1),
+                        value: removeJunk(cell.innerHTML)
+                    };
+                });
+                return { version, quarters: qDecisions };
+            })
+            console.log(myObj)
+            ;
   }
 })
 .catch (err => {
   console.log(`API Failed: ${err}`);
 })
-
-console.log('hello!');
